@@ -7,7 +7,8 @@
   'use strict';
 
   const DATA = window.ACADEMY_DATA;
-  const STORE_OPTIONS = ['Cascade Moto Portland', 'Tampa Bay Motos', 'Triumph of Santa Monica', 'Triumph Columbia River'];
+  const STORE_OPTIONS = ['Cascade Moto Portland', 'Tampa Bay Motos', 'Triumph of Santa Monica', 'Triumph Columbia River', 'MA Corporate'];
+  const CORPORATE_STORE = 'MA Corporate';
 
   // ---------- Supabase client ----------
   let supabase = null;
@@ -204,6 +205,18 @@
       roleSelect,
     ]);
 
+    // MA Corporate is Manager-only: lock the role dropdown to Manager and
+    // disable it the moment that store is picked, so it's not even possible
+    // to select something else in the UI.
+    storeSelect.addEventListener('change', () => {
+      if (storeSelect.value === CORPORATE_STORE) {
+        roleSelect.value = 'manager';
+        roleSelect.disabled = true;
+      } else {
+        roleSelect.disabled = false;
+      }
+    });
+
     const submitBtn = el('button', { class: 'btn btn--primary' }, ['Enter the Academy']);
 
     const form = el('div', {}, [nameField, storeField, roleField, submitBtn]);
@@ -211,7 +224,7 @@
     async function handleSubmit() {
       const name = document.getElementById('login-name').value.trim();
       const store = document.getElementById('login-store').value;
-      const role = document.getElementById('login-role').value;
+      let role = document.getElementById('login-role').value;
 
       if (errorBox) { errorBox.remove(); errorBox = null; }
 
@@ -224,6 +237,11 @@
         errorBox = el('div', { class: 'login-error' }, ['Please select your store.']);
         form.insertBefore(errorBox, form.firstChild);
         return;
+      }
+      // Hard enforcement, independent of the UI lock above — MA Corporate is
+      // always Manager, even if the role field were tampered with.
+      if (store === CORPORATE_STORE) {
+        role = 'manager';
       }
 
       submitBtn.disabled = true;

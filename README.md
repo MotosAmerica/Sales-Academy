@@ -31,11 +31,13 @@ each module, how many tries it took them, and each Part exam score.
 - Open `schema.sql` from this repo, copy all of it, paste it into the SQL Editor, and click **Run**
 - You should see "Success. No rows returned" — that means the two tables (`trainees` and `quiz_attempts`) were created
 
-**Before running it:** the store list is already set to your 4 stores:
+**Before running it:** the store list is already set to your 5 stores, including **MA Corporate** (a manager-only "store" for corporate staff, not a physical dealership):
 ```sql
-store text not null check (store in ('Cascade Moto Portland', 'Tampa Bay Motos', 'Triumph of Santa Monica', 'Triumph Columbia River')),
+store text not null check (store in ('Cascade Moto Portland', 'Tampa Bay Motos', 'Triumph of Santa Monica', 'Triumph Columbia River', 'MA Corporate')),
 ```
 If you ever add, remove, or rename a store, update this line in `schema.sql` (re-run it in Supabase's SQL Editor) **and** the matching `STORE_OPTIONS` list near the top of `app.js` — they must match exactly, or the login dropdown and the database rule will disagree.
+
+**If your database already existed before this store was added:** re-running `schema.sql` won't alter an existing table's constraints (it only creates tables that don't exist yet). Instead, run `migration_add_ma_corporate.sql` once in the SQL Editor — it updates the existing `trainees` table in place.
 
 ### 3. Connect the site to your Supabase project
 - In Supabase, go to **Project Settings → API**

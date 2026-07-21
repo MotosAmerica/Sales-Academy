@@ -5,8 +5,14 @@
 create table if not exists trainees (
   id uuid primary key default gen_random_uuid(),
   full_name text not null,
-  store text not null check (store in ('Cascade Moto Portland', 'Tampa Bay Motos', 'Triumph of Santa Monica', 'Triumph Columbia River')),
+  store text not null check (store in ('Cascade Moto Portland', 'Tampa Bay Motos', 'Triumph of Santa Monica', 'Triumph Columbia River', 'MA Corporate')),
   role text not null default 'sales' check (role in ('sales', 'finance', 'manager', 'admin')),
+  -- MA Corporate is a manager-only "store" (used for corporate staff, not a
+  -- physical dealership) — this constraint makes it impossible to insert a
+  -- non-manager row for it, even via a direct API call bypassing the site.
+  constraint corporate_is_manager_only check (
+    store <> 'MA Corporate' or role in ('manager', 'admin')
+  ),
   created_at timestamptz not null default now()
 );
 
