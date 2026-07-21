@@ -175,7 +175,7 @@
     const shell = el('div', { class: 'login-shell' });
 
     const logoWrap = el('div', { class: 'login-shell__logo' }, [
-      el('img', { src: 'assets/MA_logo_white_header.png', alt: 'Motos America' }),
+      el('img', { src: 'MA_logo_white_header.png', alt: 'Motos America' }),
     ]);
     shell.appendChild(logoWrap);
 
@@ -318,7 +318,7 @@
 
     const brand = el('div', { class: 'topbar__brand', onclick: () => navigate({ view: 'toc' }) }, [
       el('img', {
-        src: 'assets/MA_logo_white_header.png',
+        src: 'MA_logo_white_header.png',
         alt: 'Motos America',
         class: 'topbar__logo',
       }),
