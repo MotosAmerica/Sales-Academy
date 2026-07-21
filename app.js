@@ -1,0 +1,911 @@
+// ==========================================================================
+// Motos America Sales Academy — Application logic
+// Single-page app: no build step, no framework. Renders into #app.
+// ==========================================================================
+
+(function () {
+  'use strict';
+
+  const DATA = window.ACADEMY_DATA;
+  const STORE_OPTIONS = ['Triumph Store', 'BMW + Triumph Store'];
+
+  // ---------- Supabase client ----------
+  let supabase = null;
+  const supabaseReady =
+    window.SUPABASE_URL &&
+    window.SUPABASE_ANON_KEY &&
+    !window.SUPABASE_URL.includes('YOUR_SUPABASE') &&
+    !window.SUPABASE_ANON_KEY.includes('YOUR_SUPABASE');
+
+  if (supabaseReady && window.supabase) {
+    supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+  }
+
+  // ---------- Local session (who's logged in) ----------
+  const SESSION_KEY = 'moto_academy_session';
+
+  function getSession() {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function setSession(trainee) {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(trainee));
+  }
+
+  function clearSession() {
+    localStorage.removeItem(SESSION_KEY);
+  }
+
+  // ---------- Local progress cache (works even if Supabase is offline) ----------
+  // Keyed by trainee id. Each entry: { [quizKey]: {scorePct, correct, total, completedAt} }
+  const PROGRESS_KEY = 'moto_academy_progress';
+
+  function getLocalProgress(traineeId) {
+    try {
+      const raw = localStorage.getItem(PROGRESS_KEY);
+      const all = raw ? JSON.parse(raw) : {};
+      return all[traineeId] || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveLocalProgress(traineeId, quizKey, result) {
+    try {
+      const raw = localStorage.getItem(PROGRESS_KEY);
+      const all = raw ? JSON.parse(raw) : {};
+      if (!all[traineeId]) all[traineeId] = {};
+      all[traineeId][quizKey] = result;
+      localStorage.setItem(PROGRESS_KEY, JSON.stringify(all));
+    } catch (e) { /* ignore quota errors */ }
+  }
+
+  // ---------- Pending sync queue (for flaky connections) ----------
+  // If a Supabase write fails, we queue it here and retry on next load / action.
+  const QUEUE_KEY = 'moto_academy_pending_sync';
+
+  function getQueue() {
+    try {
+      const raw = localStorage.getItem(QUEUE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function pushToQueue(item) {
+    const q = getQueue();
+    q.push(item);
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+  }
+
+  function setQueue(items) {
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(items));
+  }
+
+  async function flushQueue() {
+    if (!supabase) return;
+    let queue = getQueue();
+    if (!queue.length) return;
+    const remaining = [];
+    for (const item of queue) {
+      try {
+        if (item.type === 'trainee') {
+          await supabase.from('trainees').upsert(item.payload, { onConflict: 'id' });
+        } else if (item.type === 'attempt') {
+          await supabase.from('quiz_attempts').insert(item.payload);
+        }
+      } catch (e) {
+        remaining.push(item);
+      }
+    }
+    setQueue(remaining);
+  }
+
+  // Try to flush whenever we come back online
+  window.addEventListener('online', flushQueue);
+
+  // ---------- Router ----------
+  // Route shape: { view: 'toc' | 'module' | 'quiz' | 'exam' | 'report' | 'login', ...params }
+  let currentRoute = { view: 'login' };
+
+  function navigate(route) {
+    currentRoute = route;
+    render();
+    window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+  }
+
+  // ---------- Utility ----------
+  function el(tag, attrs, children) {
+    const node = document.createElement(tag);
+    if (attrs) {
+      for (const [k, v] of Object.entries(attrs)) {
+        if (k === 'class') node.className = v;
+        else if (k === 'html') node.innerHTML = v;
+        else if (k.startsWith('on') && typeof v === 'function') {
+          node.addEventListener(k.slice(2).toLowerCase(), v);
+        } else if (v !== null && v !== undefined) {
+          node.setAttribute(k, v);
+        }
+      }
+    }
+    (children || []).forEach((c) => {
+      if (c === null || c === undefined) return;
+      if (typeof c === 'string') node.appendChild(document.createTextNode(c));
+      else node.appendChild(c);
+    });
+    return node;
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // Renders inline **bold** markers from the source content into <strong> tags safely.
+  function renderInline(text) {
+    const escaped = escapeHtml(text || '');
+    return escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  }
+
+  function moduleByNum(num) {
+    return DATA.modules.find((m) => m.num === num);
+  }
+
+  function quizKeyForModule(num) {
+    return `module-${num}`;
+  }
+
+  function totalModuleCount() {
+    return DATA.modules.length;
+  }
+
+  // ==========================================================================
+  // VIEW: Login
+  // ==========================================================================
+
+  function renderLogin(root) {
+    const shell = el('div', { class: 'login-shell' });
+    const card = el('div', { class: 'login-card' });
+
+    card.appendChild(el('div', { class: 'login-card__brand' }, ['Motos America']));
+    card.appendChild(el('div', { class: 'login-card__sub' }, ['Sales Academy']));
+    card.appendChild(el('div', { class: 'login-card__tag' }, ['Live the passion. Take the ride.']));
+
+    let errorBox = null;
+
+    const nameField = el('div', { class: 'field' }, [
+      el('label', {}, ['Your full name']),
+      el('input', { type: 'text', id: 'login-name', autocomplete: 'name', placeholder: 'e.g. Jordan Reyes' }),
+    ]);
+
+    const storeSelect = el('select', { id: 'login-store' }, [
+      el('option', { value: '' }, ['Select your store...']),
+      ...STORE_OPTIONS.map((s) => el('option', { value: s }, [s])),
+    ]);
+    const storeField = el('div', { class: 'field' }, [
+      el('label', {}, ['Your store']),
+      storeSelect,
+    ]);
+
+    const roleSelect = el('select', { id: 'login-role' }, [
+      el('option', { value: 'sales' }, ['Sales']),
+      el('option', { value: 'finance' }, ['Finance / F&I']),
+      el('option', { value: 'manager' }, ['Manager']),
+    ]);
+    const roleField = el('div', { class: 'field' }, [
+      el('label', {}, ['Your role']),
+      roleSelect,
+    ]);
+
+    const submitBtn = el('button', { class: 'btn btn--primary' }, ['Enter the Academy']);
+
+    const form = el('div', {}, [nameField, storeField, roleField, submitBtn]);
+
+    async function handleSubmit() {
+      const name = document.getElementById('login-name').value.trim();
+      const store = document.getElementById('login-store').value;
+      const role = document.getElementById('login-role').value;
+
+      if (errorBox) { errorBox.remove(); errorBox = null; }
+
+      if (!name || name.length < 2) {
+        errorBox = el('div', { class: 'login-error' }, ['Please enter your full name.']);
+        form.insertBefore(errorBox, form.firstChild);
+        return;
+      }
+      if (!store) {
+        errorBox = el('div', { class: 'login-error' }, ['Please select your store.']);
+        form.insertBefore(errorBox, form.firstChild);
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing you in...';
+
+      const trainee = await findOrCreateTrainee(name, store, role);
+
+      setSession(trainee);
+      navigate({ view: 'toc' });
+    }
+
+    submitBtn.addEventListener('click', handleSubmit);
+    [nameField, storeField].forEach((f) => {
+      f.querySelector('input,select').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleSubmit();
+      });
+    });
+
+    card.appendChild(form);
+    shell.appendChild(card);
+    root.appendChild(shell);
+  }
+
+  // Looks up a trainee by name+store, or creates a new record. Falls back to a
+  // local-only id if Supabase isn't configured or the network call fails, so
+  // the app still works offline / before setup is complete.
+  async function findOrCreateTrainee(name, store, role) {
+    const localId = 'local-' + name.toLowerCase().replace(/\s+/g, '-') + '-' + store.toLowerCase().replace(/\s+/g, '-');
+    const fallback = { id: localId, full_name: name, store, role, _local: true };
+
+    if (!supabase) return fallback;
+
+    try {
+      const { data: existing, error: findErr } = await supabase
+        .from('trainees')
+        .select('*')
+        .eq('full_name', name)
+        .eq('store', store)
+        .limit(1);
+
+      if (findErr) throw findErr;
+
+      if (existing && existing.length) {
+        return existing[0];
+      }
+
+      const { data: created, error: createErr } = await supabase
+        .from('trainees')
+        .insert({ full_name: name, store, role })
+        .select()
+        .single();
+
+      if (createErr) throw createErr;
+      return created;
+    } catch (e) {
+      // Network/setup issue — queue a create attempt for later, and proceed
+      // with a local id so the trainee isn't blocked from training today.
+      pushToQueue({ type: 'trainee', payload: { id: undefined, full_name: name, store, role } });
+      return fallback;
+    }
+  }
+
+  // ==========================================================================
+  // Shared: top bar
+  // ==========================================================================
+
+  function renderTopbar(root, trainee) {
+    const bar = el('div', { class: 'topbar' });
+
+    const brand = el('div', { class: 'topbar__brand', onclick: () => navigate({ view: 'toc' }) }, [
+      el('div', { class: 'topbar__brand-name' }, ['Motos America']),
+      el('div', { class: 'topbar__brand-sub' }, ['Sales Academy']),
+    ]);
+
+    const right = el('div', { class: 'topbar__right' });
+    right.appendChild(el('span', { class: 'topbar__user' }, [`${trainee.full_name} · ${trainee.store}`]));
+
+    if (trainee.role === 'manager' || trainee.role === 'admin') {
+      right.appendChild(el('button', { class: 'topbar__link', onclick: () => navigate({ view: 'report' }) }, ['Report']));
+    }
+    right.appendChild(el('button', { class: 'topbar__link', onclick: () => { clearSession(); navigate({ view: 'login' }); } }, ['Sign out']));
+
+    bar.appendChild(brand);
+    bar.appendChild(right);
+    root.appendChild(bar);
+  }
+
+  // ==========================================================================
+  // VIEW: Table of Contents / Dashboard
+  // ==========================================================================
+
+  async function renderTOC(root, trainee) {
+    renderTopbar(root, trainee);
+    const page = el('div', { class: 'page' });
+    page.appendChild(el('div', { class: 'loading' }, [el('div', { class: 'spinner' }), 'Loading your progress...']));
+    root.appendChild(page);
+
+    const progress = await fetchProgress(trainee.id);
+
+    page.innerHTML = '';
+
+    const partI = DATA.modules.filter((m) => m.part === 'I');
+    const partII = DATA.modules.filter((m) => m.part === 'II');
+
+    const doneCount = DATA.modules.filter((m) => progress[quizKeyForModule(m.num)]).length;
+    const exam1Done = !!progress['part1-exam'];
+    const exam2Done = !!progress['part2-exam'];
+
+    const hero = el('div', { class: 'hero' }, [
+      el('div', { class: 'hero__eyebrow' }, ['Welcome back']),
+      el('div', { class: 'hero__title' }, [trainee.full_name.split(' ')[0] + ', here\u2019s your training']),
+      el('div', { class: 'hero__desc' }, ['Work through each module, then take the 5-question review. Finish a Part to unlock its 20-question exam.']),
+      el('div', { class: 'progress-summary' }, [
+        el('div', { class: 'progress-chip' }, [el('strong', {}, [`${doneCount}/${totalModuleCount()}`]), 'modules reviewed']),
+        el('div', { class: 'progress-chip' }, [el('strong', {}, [exam1Done ? '\u2713' : '\u2014']), 'Part I exam']),
+        el('div', { class: 'progress-chip' }, [el('strong', {}, [exam2Done ? '\u2713' : '\u2014']), 'Part II exam']),
+      ]),
+    ]);
+    page.appendChild(hero);
+
+    function buildPartSection(label, title, mods, examKey, examTitle, examQuestions) {
+      const section = el('div', { class: 'part-section' });
+      section.appendChild(el('div', { class: 'part-section__header' }, [
+        el('span', { class: 'part-section__label' }, [`Part ${label}`]),
+        el('span', { class: 'part-section__title' }, [title]),
+      ]));
+
+      const list = el('div', { class: 'module-list' });
+      mods.forEach((m) => {
+        const key = quizKeyForModule(m.num);
+        const result = progress[key];
+        const done = !!result;
+        const card = el('button', { class: 'module-card' + (done ? ' module-card--done' : ''), onclick: () => navigate({ view: 'module', num: m.num }) }, [
+          el('div', { class: 'module-card__num' }, [String(m.num).padStart(2, '0')]),
+          el('div', { class: 'module-card__body' }, [
+            el('div', { class: 'module-card__title' }, [m.title]),
+            el('div', { class: 'module-card__meta' }, [
+              done
+                ? el('span', { class: 'status-pill status-pill--done' }, [`Reviewed \u00b7 ${result.correct}/${result.total}`])
+                : el('span', { class: 'status-pill status-pill--todo' }, ['Not started']),
+            ]),
+          ]),
+        ]);
+        list.appendChild(card);
+      });
+      section.appendChild(list);
+
+      const allModsDone = mods.every((m) => progress[quizKeyForModule(m.num)]);
+      const examResult = progress[examKey];
+      const examCard = el('div', { class: 'exam-card' }, [
+        el('div', {}, [
+          el('div', { class: 'exam-card__title' }, [examTitle]),
+          el('div', { class: 'exam-card__desc' }, [
+            examResult
+              ? `Completed \u00b7 Score: ${examResult.correct}/${examResult.total} (${Math.round(examResult.scorePct)}%)`
+              : (allModsDone ? '20 questions \u00b7 ready when you are' : `Complete all ${mods.length} module reviews above to unlock`),
+          ]),
+        ]),
+        el('button', {
+          class: 'btn btn--primary',
+          disabled: !allModsDone,
+          onclick: () => allModsDone && navigate({ view: 'exam', part: label }),
+        }, [examResult ? 'Retake Exam' : 'Start Exam']),
+      ]);
+      section.appendChild(examCard);
+
+      return section;
+    }
+
+    page.appendChild(buildPartSection('I', 'The Sales Team', partI, 'part1-exam', 'Part I Exam \u2014 The Sales Team', DATA.part1Exam));
+    page.appendChild(buildPartSection('II', 'The Finance & Insurance Office', partII, 'part2-exam', 'Part II Exam \u2014 The Finance & Insurance Office', DATA.part2Exam));
+  }
+
+  // Fetches all quiz results for a trainee, merging Supabase (if available)
+  // with anything cached locally (so results still show up if the network
+  // request fails, e.g. flaky wifi on the showroom floor).
+  async function fetchProgress(traineeId) {
+    const local = getLocalProgress(traineeId);
+    if (!supabase || traineeId.startsWith('local-')) return local;
+
+    try {
+      const { data, error } = await supabase
+        .from('quiz_attempts')
+        .select('*')
+        .eq('trainee_id', traineeId)
+        .order('completed_at', { ascending: true });
+
+      if (error) throw error;
+
+      const merged = { ...local };
+      (data || []).forEach((row) => {
+        merged[row.quiz_key] = {
+          correct: row.correct_answers,
+          total: row.total_questions,
+          scorePct: row.score_pct,
+          completedAt: row.completed_at,
+        };
+      });
+      return merged;
+    } catch (e) {
+      return local;
+    }
+  }
+
+  // ==========================================================================
+  // VIEW: Module reader
+  // ==========================================================================
+
+  function renderBlockToNode(b) {
+    switch (b.type) {
+      case 'part':
+        if (/GOAL OF MODULE/i.test(b.title)) {
+          return el('div', { class: 'block-goalhead' }, [b.title.toUpperCase()]);
+        }
+        return el('div', {}, [
+          el('div', { class: 'block-part-num' }, [`Part ${b.num}`]),
+          el('div', { class: 'block-part-title' }, [b.title]),
+        ]);
+      case 'goalhead':
+        return el('div', { class: 'block-goalhead' }, [b.text.toUpperCase()]);
+      case 'subhead':
+        return el('div', { class: 'block-subhead' }, [b.text]);
+      case 'emphasis':
+        return el('p', { class: 'block-emphasis', html: renderInline(b.text) });
+      case 'quote':
+        return el('p', { class: 'block-quote', html: renderInline(b.text) });
+      case 'bullets':
+        return el('ul', { class: 'block-bullets' }, b.items.map((it) => el('li', { html: renderInline(it) })));
+      case 'ordered':
+        return el('ol', { class: 'block-ordered' }, b.items.map((it) => el('li', { html: renderInline(it) })));
+      case 'para':
+        return el('p', { class: 'block-para', html: renderInline(b.text) });
+      default:
+        return null;
+    }
+  }
+
+  function renderModule(root, trainee, num) {
+    renderTopbar(root, trainee);
+    const page = el('div', { class: 'page' });
+
+    const m = moduleByNum(num);
+    if (!m) {
+      page.appendChild(el('div', { class: 'empty-state' }, ['Module not found.']));
+      root.appendChild(page);
+      return;
+    }
+
+    const crumbs = el('div', { class: 'crumbs' }, [
+      el('button', { onclick: () => navigate({ view: 'toc' }) }, ['Contents']),
+      el('span', {}, ['/']),
+      el('span', {}, [`Module ${String(m.num).padStart(2, '0')}`]),
+    ]);
+    page.appendChild(crumbs);
+
+    page.appendChild(el('div', { class: 'module-header__eyebrow' }, [`Module ${String(m.num).padStart(2, '0')}`]));
+    page.appendChild(el('div', { class: 'module-header__title' }, [m.title]));
+    if (m.tagline) {
+      page.appendChild(el('div', { class: 'module-header__tagline' }, [m.tagline]));
+    }
+
+    const body = el('div', { class: 'module-body' });
+    m.blocks.forEach((b) => {
+      const node = renderBlockToNode(b);
+      if (node) body.appendChild(node);
+    });
+    page.appendChild(body);
+
+    const nav = el('div', { class: 'module-nav' });
+    const prevModule = moduleByNum(num - 1);
+    const nextModule = moduleByNum(num + 1);
+
+    nav.appendChild(
+      prevModule
+        ? el('button', { class: 'btn btn--ghost', onclick: () => navigate({ view: 'module', num: prevModule.num }) }, ['\u2190 Previous Module'])
+        : el('span', {})
+    );
+    nav.appendChild(
+      el('button', { class: 'btn btn--primary', onclick: () => navigate({ view: 'quiz', num: m.num }) }, ['Take the Module Review \u2192'])
+    );
+    page.appendChild(nav);
+
+    if (nextModule) {
+      const nextRow = el('div', { style: 'text-align:right; margin-top:10px;' });
+      nextRow.appendChild(el('button', { class: 'btn btn--ghost', onclick: () => navigate({ view: 'module', num: nextModule.num }) }, ['Skip to Next Module \u2192']));
+      page.appendChild(nextRow);
+    }
+
+    root.appendChild(page);
+  }
+
+
+  // ==========================================================================
+  // VIEW: Quiz (module review, 5 questions) and Exam (Part review, 20 questions)
+  // ==========================================================================
+
+  const LETTERS = ['A', 'B', 'C', 'D'];
+
+  function renderQuizOrExam(root, trainee, opts) {
+    // opts: { mode: 'quiz', num } or { mode: 'exam', part: 'I'|'II' }
+    renderTopbar(root, trainee);
+    const page = el('div', { class: 'page' });
+
+    let questions, quizKey, quizLabel, backRoute, eyebrow, title, desc;
+
+    if (opts.mode === 'quiz') {
+      const m = moduleByNum(opts.num);
+      questions = DATA.moduleQuizzes[String(opts.num)];
+      quizKey = quizKeyForModule(opts.num);
+      quizLabel = `Module ${String(opts.num).padStart(2, '0')} Review`;
+      backRoute = { view: 'module', num: opts.num };
+      eyebrow = `Module ${String(opts.num).padStart(2, '0')} Review`;
+      title = 'Check Your Knowledge';
+      desc = `Five questions on ${m.title}.`;
+    } else {
+      const isOne = opts.part === 'I';
+      questions = isOne ? DATA.part1Exam : DATA.part2Exam;
+      quizKey = isOne ? 'part1-exam' : 'part2-exam';
+      quizLabel = isOne ? 'Part I Exam \u2014 The Sales Team' : 'Part II Exam \u2014 The Finance & Insurance Office';
+      backRoute = { view: 'toc' };
+      eyebrow = `Part ${opts.part} Exam`;
+      title = isOne ? 'The Sales Team' : 'The Finance & Insurance Office';
+      desc = '20 questions covering everything in this Part.';
+    }
+
+    const state = { answers: new Array(questions.length).fill(null), submitted: false };
+
+    const header = el('div', { class: 'quiz-header' }, [
+      el('div', { class: 'quiz-header__eyebrow' }, [eyebrow]),
+      el('div', { class: 'quiz-header__title' }, [title]),
+      el('div', { class: 'quiz-header__desc' }, [desc]),
+    ]);
+    page.appendChild(header);
+
+    const progressBar = el('div', { class: 'quiz-progress' }, [el('div', { class: 'quiz-progress__bar', style: 'width:0%' })]);
+    page.appendChild(progressBar);
+
+    const questionsWrap = el('div', {});
+    page.appendChild(questionsWrap);
+
+    function updateProgress() {
+      const answered = state.answers.filter((a) => a !== null).length;
+      const pct = Math.round((answered / questions.length) * 100);
+      progressBar.querySelector('.quiz-progress__bar').style.width = pct + '%';
+    }
+
+    function renderQuestions() {
+      questionsWrap.innerHTML = '';
+      questions.forEach((q, qIdx) => {
+        const card = el('div', { class: 'question-card' });
+        card.appendChild(el('div', { class: 'question-card__num' }, [`Question ${qIdx + 1} of ${questions.length}`]));
+        card.appendChild(el('div', { class: 'question-card__text', html: renderInline(q.q) }));
+
+        const list = el('div', { class: 'option-list' });
+        const optionNodes = [];
+
+        function classesFor(oIdx) {
+          const isSelected = state.answers[qIdx] === oIdx;
+          const isCorrectAnswer = oIdx === q.answer;
+          let cls = 'option';
+          if (state.submitted) {
+            if (isCorrectAnswer) cls += ' correct';
+            else if (isSelected && !isCorrectAnswer) cls += ' incorrect';
+          } else if (isSelected) {
+            cls += ' selected';
+          }
+          return cls;
+        }
+
+        q.options.forEach((opt, oIdx) => {
+          const optionNode = el('label', { class: classesFor(oIdx) }, [
+            el('span', { class: 'option__letter' }, [LETTERS[oIdx]]),
+            el('span', { html: renderInline(opt) }),
+          ]);
+
+          if (!state.submitted) {
+            optionNode.addEventListener('click', () => {
+              state.answers[qIdx] = oIdx;
+              updateProgress();
+              // Update only this question's option classes in place —
+              // no full re-render, so scroll position and other
+              // questions' state stay untouched.
+              optionNodes.forEach((node, i) => { node.className = classesFor(i); });
+            });
+          }
+          optionNodes.push(optionNode);
+          list.appendChild(optionNode);
+        });
+        card.appendChild(list);
+        questionsWrap.appendChild(card);
+      });
+      updateProgress();
+    }
+
+    renderQuestions();
+
+    const actions = el('div', { class: 'quiz-actions' });
+    const submitBtn = el('button', { class: 'btn btn--primary' }, ['Submit Answers']);
+    submitBtn.addEventListener('click', async () => {
+      const unanswered = state.answers.filter((a) => a === null).length;
+      if (unanswered > 0) {
+        if (!confirm(`You have ${unanswered} unanswered question${unanswered > 1 ? 's' : ''}. Submit anyway?`)) {
+          return;
+        }
+      }
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Scoring...';
+
+      state.submitted = true;
+      const correct = questions.reduce((sum, q, i) => sum + (state.answers[i] === q.answer ? 1 : 0), 0);
+      const result = {
+        correct,
+        total: questions.length,
+        scorePct: Math.round((correct / questions.length) * 1000) / 10,
+        completedAt: new Date().toISOString(),
+      };
+
+      saveLocalProgress(trainee.id, quizKey, result);
+      await recordAttempt(trainee, quizKey, quizLabel, questions, state.answers, result);
+
+      renderQuizResults(root, trainee, { questions, answers: state.answers, result, quizLabel, backRoute, opts });
+    });
+    actions.appendChild(submitBtn);
+    page.appendChild(actions);
+
+    root.appendChild(page);
+  }
+
+  async function recordAttempt(trainee, quizKey, quizLabel, questions, answers, result) {
+    const payload = {
+      trainee_id: trainee.id,
+      quiz_key: quizKey,
+      quiz_label: quizLabel,
+      total_questions: result.total,
+      correct_answers: result.correct,
+      score_pct: result.scorePct,
+      answers: answers,
+      completed_at: result.completedAt,
+    };
+
+    if (!supabase || trainee._local) {
+      pushToQueue({ type: 'attempt', payload });
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from('quiz_attempts').insert(payload);
+      if (error) throw error;
+      // A previously-queued trainee record may now be syncable too.
+      flushQueue();
+    } catch (e) {
+      pushToQueue({ type: 'attempt', payload });
+    }
+  }
+
+  function renderQuizResults(root, trainee, ctx) {
+    root.innerHTML = '';
+    renderTopbar(root, trainee);
+    const page = el('div', { class: 'page' });
+
+    const { questions, answers, result, backRoute } = ctx;
+    const passed = result.scorePct >= 70;
+
+    const card = el('div', { class: 'result-card' });
+    card.appendChild(el('div', { class: 'result-card__score' + (passed ? '' : ' result-card__score--fail') }, [`${result.correct}/${result.total}`]));
+    card.appendChild(el('div', { class: 'result-card__label' }, [`${result.scorePct}% Score`]));
+    card.appendChild(el('div', { class: 'result-card__msg' }, [
+      passed
+        ? 'Nice work \u2014 that\u2019s a passing score. Review any missed questions below.'
+        : 'Take another look at the module, then feel free to retake this review.',
+    ]));
+
+    const review = el('div', { class: 'result-review' });
+    questions.forEach((q, i) => {
+      const userAnswer = answers[i];
+      const isCorrect = userAnswer === q.answer;
+      const item = el('div', { class: 'result-review__item' });
+      item.appendChild(el('div', { class: 'result-review__q' }, [`${i + 1}. ${q.q}`]));
+      item.appendChild(el('div', { class: 'result-review__a ' + (isCorrect ? 'right' : 'wrong') }, [
+        userAnswer === null
+          ? `Not answered. Correct answer: ${LETTERS[q.answer]}. ${q.options[q.answer]}`
+          : isCorrect
+            ? `Correct: ${LETTERS[q.answer]}. ${q.options[q.answer]}`
+            : `You chose ${LETTERS[userAnswer]}. ${q.options[userAnswer]} \u2014 Correct answer: ${LETTERS[q.answer]}. ${q.options[q.answer]}`,
+      ]));
+      review.appendChild(item);
+    });
+    card.appendChild(review);
+
+    const actions = el('div', { class: 'quiz-actions' });
+    actions.appendChild(el('button', { class: 'btn btn--ghost', onclick: () => navigate(backRoute) }, ['Back']));
+    actions.appendChild(el('button', { class: 'btn btn--primary', onclick: () => navigate({ view: 'toc' }) }, ['Contents']));
+    card.appendChild(actions);
+
+    page.appendChild(card);
+    root.appendChild(page);
+  }
+
+
+  // ==========================================================================
+  // VIEW: Report (manager / admin) — who's registered, who's completed what
+  // ==========================================================================
+
+  async function renderReport(root, trainee) {
+    renderTopbar(root, trainee);
+    const page = el('div', { class: 'page page--wide' });
+
+    if (trainee.role !== 'manager' && trainee.role !== 'admin') {
+      page.appendChild(el('div', { class: 'empty-state' }, ['This report is only available to managers.']));
+      root.appendChild(page);
+      return;
+    }
+
+    page.appendChild(el('div', { class: 'hero__eyebrow' }, ['Manager view']));
+    page.appendChild(el('div', { class: 'hero__title' }, ['Training Report']));
+
+    if (!supabase) {
+      page.appendChild(el('div', { class: 'banner banner--warn' }, [
+        'Supabase isn\u2019t configured yet, so this report only shows results saved on this device. Once Supabase is connected, this will show every trainee across every device.',
+      ]));
+    }
+
+    const loadingEl = el('div', { class: 'loading' }, [el('div', { class: 'spinner' }), 'Loading report...']);
+    page.appendChild(loadingEl);
+    root.appendChild(page);
+
+    const { trainees, attempts } = await fetchAllReportData(trainee.store);
+
+    loadingEl.remove();
+
+    const totalQuizzes = totalModuleCount() + 2; // 21 modules + 2 exams
+
+    // Summary cards
+    const completedAll = trainees.filter((t) => {
+      const theirAttempts = attempts.filter((a) => a.trainee_id === t.id);
+      return theirAttempts.length >= totalQuizzes;
+    }).length;
+
+    const summary = el('div', { class: 'report-summary-cards' }, [
+      el('div', { class: 'summary-card' }, [el('div', { class: 'summary-card__num' }, [String(trainees.length)]), el('div', { class: 'summary-card__label' }, ['Registered'])]),
+      el('div', { class: 'summary-card' }, [el('div', { class: 'summary-card__num' }, [String(completedAll)]), el('div', { class: 'summary-card__label' }, ['Fully Completed'])]),
+      el('div', { class: 'summary-card' }, [el('div', { class: 'summary-card__num' }, [String(attempts.length)]), el('div', { class: 'summary-card__label' }, ['Total Attempts'])]),
+    ]);
+    page.appendChild(summary);
+
+    // Controls
+    const search = el('input', { type: 'text', placeholder: 'Search by name...' });
+    const storeFilter = el('select', {}, [
+      el('option', { value: '' }, ['All stores']),
+      ...STORE_OPTIONS.map((s) => el('option', { value: s }, [s])),
+    ]);
+    const controls = el('div', { class: 'report-controls' }, [search, storeFilter]);
+    page.appendChild(controls);
+
+    const tableWrap = el('div', { class: 'report-table-wrap' });
+    page.appendChild(tableWrap);
+
+    function buildTable() {
+      const q = search.value.trim().toLowerCase();
+      const storeQ = storeFilter.value;
+
+      const rows = trainees
+        .filter((t) => (!q || t.full_name.toLowerCase().includes(q)) && (!storeQ || t.store === storeQ))
+        .map((t) => {
+          const theirAttempts = attempts.filter((a) => a.trainee_id === t.id);
+          const modulesDone = new Set(theirAttempts.filter((a) => a.quiz_key.startsWith('module-')).map((a) => a.quiz_key)).size;
+          const exam1 = theirAttempts.find((a) => a.quiz_key === 'part1-exam');
+          const exam2 = theirAttempts.find((a) => a.quiz_key === 'part2-exam');
+          const avgScore = theirAttempts.length
+            ? Math.round(theirAttempts.reduce((s, a) => s + Number(a.score_pct), 0) / theirAttempts.length)
+            : null;
+          const lastActive = theirAttempts.length
+            ? theirAttempts.reduce((latest, a) => (a.completed_at > latest ? a.completed_at : latest), theirAttempts[0].completed_at)
+            : null;
+
+          return { t, modulesDone, exam1, exam2, avgScore, lastActive };
+        });
+
+      tableWrap.innerHTML = '';
+      if (!rows.length) {
+        tableWrap.appendChild(el('div', { class: 'empty-state' }, ['No trainees match this filter yet.']));
+        return;
+      }
+
+      const table = el('table', { class: 'report-table' });
+      const thead = el('thead', {}, [
+        el('tr', {}, [
+          el('th', {}, ['Name']),
+          el('th', {}, ['Store']),
+          el('th', {}, ['Role']),
+          el('th', {}, ['Modules Reviewed']),
+          el('th', {}, ['Part I Exam']),
+          el('th', {}, ['Part II Exam']),
+          el('th', {}, ['Avg Score']),
+          el('th', {}, ['Last Active']),
+        ]),
+      ]);
+      table.appendChild(thead);
+
+      const tbody = el('tbody', {});
+      rows.forEach(({ t, modulesDone, exam1, exam2, avgScore, lastActive }) => {
+        tbody.appendChild(el('tr', {}, [
+          el('td', {}, [t.full_name]),
+          el('td', {}, [t.store]),
+          el('td', {}, [t.role || 'sales']),
+          el('td', {}, [`${modulesDone}/${totalModuleCount()}`]),
+          el('td', {}, [exam1 ? `${exam1.correct_answers}/${exam1.total_questions}` : '\u2014']),
+          el('td', {}, [exam2 ? `${exam2.correct_answers}/${exam2.total_questions}` : '\u2014']),
+          el('td', {}, [avgScore !== null ? `${avgScore}%` : '\u2014']),
+          el('td', {}, [lastActive ? new Date(lastActive).toLocaleDateString() : '\u2014']),
+        ]));
+      });
+      table.appendChild(tbody);
+      tableWrap.appendChild(table);
+    }
+
+    buildTable();
+    search.addEventListener('input', buildTable);
+    storeFilter.addEventListener('change', buildTable);
+  }
+
+  async function fetchAllReportData(managerStore) {
+    if (!supabase) {
+      return { trainees: [], attempts: [] };
+    }
+    try {
+      const { data: trainees, error: tErr } = await supabase.from('trainees').select('*').order('created_at', { ascending: false });
+      if (tErr) throw tErr;
+      const { data: attempts, error: aErr } = await supabase.from('quiz_attempts').select('*');
+      if (aErr) throw aErr;
+      return { trainees: trainees || [], attempts: attempts || [] };
+    } catch (e) {
+      return { trainees: [], attempts: [] };
+    }
+  }
+
+  // ==========================================================================
+  // Main render dispatcher
+  // ==========================================================================
+
+  function render() {
+    const root = document.getElementById('app');
+    root.innerHTML = '';
+
+    const trainee = getSession();
+
+    if (!trainee && currentRoute.view !== 'login') {
+      currentRoute = { view: 'login' };
+    }
+
+    switch (currentRoute.view) {
+      case 'login':
+        renderLogin(root);
+        break;
+      case 'toc':
+        renderTOC(root, trainee);
+        break;
+      case 'module':
+        renderModule(root, trainee, currentRoute.num);
+        break;
+      case 'quiz':
+        renderQuizOrExam(root, trainee, { mode: 'quiz', num: currentRoute.num });
+        break;
+      case 'exam':
+        renderQuizOrExam(root, trainee, { mode: 'exam', part: currentRoute.part });
+        break;
+      case 'report':
+        renderReport(root, trainee);
+        break;
+      default:
+        renderLogin(root);
+    }
+  }
+
+  // ==========================================================================
+  // Init
+  // ==========================================================================
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const existing = getSession();
+    currentRoute = existing ? { view: 'toc' } : { view: 'login' };
+    render();
+    flushQueue();
+  });
+})();
