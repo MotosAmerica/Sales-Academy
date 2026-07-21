@@ -7,7 +7,7 @@
   'use strict';
 
   const DATA = window.ACADEMY_DATA;
-  const STORE_OPTIONS = ['Triumph Store', 'BMW + Triumph Store'];
+  const STORE_OPTIONS = ['Cascade Moto Portland', 'Tampa Bay Motos', 'Triumph of Santa Monica', 'Triumph Columbia River'];
 
   // ---------- Supabase client ----------
   let supabase = null;
@@ -328,16 +328,16 @@
     const partI = DATA.modules.filter((m) => m.part === 'I');
     const partII = DATA.modules.filter((m) => m.part === 'II');
 
-    const doneCount = DATA.modules.filter((m) => progress[quizKeyForModule(m.num)]).length;
+    const doneCount = DATA.modules.filter((m) => isPassed(progress[quizKeyForModule(m.num)])).length;
     const exam1Done = !!progress['part1-exam'];
     const exam2Done = !!progress['part2-exam'];
 
     const hero = el('div', { class: 'hero' }, [
       el('div', { class: 'hero__eyebrow' }, ['Welcome back']),
       el('div', { class: 'hero__title' }, [trainee.full_name.split(' ')[0] + ', here\u2019s your training']),
-      el('div', { class: 'hero__desc' }, ['Work through each module, then take the 5-question review. Finish a Part to unlock its 20-question exam.']),
+      el('div', { class: 'hero__desc' }, ['Work through each module, then pass its 5-question review with a perfect score. Finish a Part to unlock its 20-question exam.']),
       el('div', { class: 'progress-summary' }, [
-        el('div', { class: 'progress-chip' }, [el('strong', {}, [`${doneCount}/${totalModuleCount()}`]), 'modules reviewed']),
+        el('div', { class: 'progress-chip' }, [el('strong', {}, [`${doneCount}/${totalModuleCount()}`]), 'modules passed']),
         el('div', { class: 'progress-chip' }, [el('strong', {}, [exam1Done ? '\u2713' : '\u2014']), 'Part I exam']),
         el('div', { class: 'progress-chip' }, [el('strong', {}, [exam2Done ? '\u2713' : '\u2014']), 'Part II exam']),
       ]),
@@ -355,15 +355,22 @@
       mods.forEach((m) => {
         const key = quizKeyForModule(m.num);
         const result = progress[key];
-        const done = !!result;
-        const card = el('button', { class: 'module-card' + (done ? ' module-card--done' : ''), onclick: () => navigate({ view: 'module', num: m.num }) }, [
+        const passed = isPassed(result);
+        const attempts = result ? (result.attempts || 1) : 0;
+        let metaLabel;
+        if (passed) {
+          metaLabel = attempts > 1 ? `Passed \u00b7 ${attempts} attempts` : 'Passed \u00b7 1st attempt';
+        } else if (result) {
+          metaLabel = `Not yet \u00b7 ${result.correct}/${result.total} (attempt ${attempts})`;
+        } else {
+          metaLabel = 'Not started';
+        }
+        const card = el('button', { class: 'module-card' + (passed ? ' module-card--done' : ''), onclick: () => navigate({ view: 'module', num: m.num }) }, [
           el('div', { class: 'module-card__num' }, [String(m.num).padStart(2, '0')]),
           el('div', { class: 'module-card__body' }, [
             el('div', { class: 'module-card__title' }, [m.title]),
             el('div', { class: 'module-card__meta' }, [
-              done
-                ? el('span', { class: 'status-pill status-pill--done' }, [`Reviewed \u00b7 ${result.correct}/${result.total}`])
-                : el('span', { class: 'status-pill status-pill--todo' }, ['Not started']),
+              el('span', { class: 'status-pill ' + (passed ? 'status-pill--done' : 'status-pill--todo') }, [metaLabel]),
             ]),
           ]),
         ]);
@@ -371,7 +378,7 @@
       });
       section.appendChild(list);
 
-      const allModsDone = mods.every((m) => progress[quizKeyForModule(m.num)]);
+      const allModsDone = mods.every((m) => isPassed(progress[quizKeyForModule(m.num)]));
       const examResult = progress[examKey];
       const examCard = el('div', { class: 'exam-card' }, [
         el('div', {}, [
@@ -379,7 +386,7 @@
           el('div', { class: 'exam-card__desc' }, [
             examResult
               ? `Completed \u00b7 Score: ${examResult.correct}/${examResult.total} (${Math.round(examResult.scorePct)}%)`
-              : (allModsDone ? '20 questions \u00b7 ready when you are' : `Complete all ${mods.length} module reviews above to unlock`),
+              : (allModsDone ? '20 questions \u00b7 ready when you are' : `Pass all ${mods.length} module reviews above (100% each) to unlock`),
           ]),
         ]),
         el('button', {
@@ -395,6 +402,12 @@
 
     page.appendChild(buildPartSection('I', 'The Sales Team', partI, 'part1-exam', 'Part I Exam \u2014 The Sales Team', DATA.part1Exam));
     page.appendChild(buildPartSection('II', 'The Finance & Insurance Office', partII, 'part2-exam', 'Part II Exam \u2014 The Finance & Insurance Office', DATA.part2Exam));
+  }
+
+  // A module review only counts as "passed" at a perfect score. Part exams
+  // don't use this — any completed attempt counts, since they aren't gated.
+  function isPassed(result) {
+    return !!result && result.correct === result.total;
   }
 
   // Fetches all quiz results for a trainee, merging Supabase (if available)
@@ -641,10 +654,15 @@
         completedAt: new Date().toISOString(),
       };
 
-      saveLocalProgress(trainee.id, quizKey, result);
-      await recordAttempt(trainee, quizKey, quizLabel, questions, state.answers, result);
+      const savedResult = saveLocalProgress(trainee.id, quizKey, result);
+      const attemptNumber = savedResult ? savedResult.attempts : 1;
+      await recordAttempt(trainee, quizKey, quizLabel, questions, state.answers, result, attemptNumber);
 
-      renderQuizResults(root, trainee, { questions, answers: state.answers, result, quizLabel, backRoute, opts });
+      if (opts.mode === 'quiz') {
+        renderModuleQuizResult(root, trainee, { result, attemptNumber, backRoute, opts });
+      } else {
+        renderQuizResults(root, trainee, { questions, answers: state.answers, result, quizLabel, backRoute, opts });
+      }
     });
     actions.appendChild(submitBtn);
     page.appendChild(actions);
@@ -652,7 +670,7 @@
     root.appendChild(page);
   }
 
-  async function recordAttempt(trainee, quizKey, quizLabel, questions, answers, result) {
+  async function recordAttempt(trainee, quizKey, quizLabel, questions, answers, result, attemptNumber) {
     const payload = {
       trainee_id: trainee.id,
       quiz_key: quizKey,
@@ -661,6 +679,7 @@
       correct_answers: result.correct,
       score_pct: result.scorePct,
       answers: answers,
+      attempt_number: attemptNumber || 1,
       completed_at: result.completedAt,
     };
 
@@ -677,6 +696,47 @@
     } catch (e) {
       pushToQueue({ type: 'attempt', payload });
     }
+  }
+
+  // Module review result screen: mastery-gated. A perfect score is required
+  // to move on; anything else withholds which answers were right/wrong and
+  // sends the trainee back to re-read the module before they can retry —
+  // this nudges toward actually re-reading rather than guess-and-check.
+  function renderModuleQuizResult(root, trainee, ctx) {
+    root.innerHTML = '';
+    renderTopbar(root, trainee);
+    const page = el('div', { class: 'page' });
+
+    const { result, attemptNumber, backRoute, opts } = ctx;
+    const passed = result.correct === result.total;
+
+    const card = el('div', { class: 'result-card' });
+    card.appendChild(el('div', { class: 'result-card__score' + (passed ? '' : ' result-card__score--fail') }, [`${result.correct}/${result.total}`]));
+    card.appendChild(el('div', { class: 'result-card__label' }, [passed ? 'Passed' : `Not Yet \u00b7 Attempt ${attemptNumber}`]));
+
+    if (passed) {
+      card.appendChild(el('div', { class: 'result-card__msg' }, [
+        'Nice work \u2014 perfect score. This module is locked in.',
+      ]));
+      const actions = el('div', { class: 'quiz-actions' });
+      const nextModule = moduleByNum(opts.num + 1);
+      actions.appendChild(el('button', { class: 'btn btn--ghost' }, ['Back to Contents']));
+      actions.querySelector('button').addEventListener('click', () => navigate({ view: 'toc' }));
+      if (nextModule) {
+        actions.appendChild(el('button', { class: 'btn btn--primary', onclick: () => navigate({ view: 'module', num: nextModule.num }) }, ['Next Module \u2192']));
+      }
+      card.appendChild(actions);
+    } else {
+      card.appendChild(el('div', { class: 'result-card__msg' }, [
+        'Not quite \u2014 every question needs to be correct to pass this review. Head back and re-read the module, then try again.',
+      ]));
+      const actions = el('div', { class: 'quiz-actions' });
+      actions.appendChild(el('button', { class: 'btn btn--primary', onclick: () => navigate({ view: 'module', num: opts.num }) }, ['Review the Module \u2192']));
+      card.appendChild(actions);
+    }
+
+    page.appendChild(card);
+    root.appendChild(page);
   }
 
   function renderQuizResults(root, trainee, ctx) {
@@ -759,7 +819,14 @@
     // Summary cards
     const completedAll = trainees.filter((t) => {
       const theirAttempts = attempts.filter((a) => a.trainee_id === t.id);
-      return theirAttempts.length >= totalQuizzes;
+      const passedModules = new Set(
+        theirAttempts
+          .filter((a) => a.quiz_key.startsWith('module-') && a.correct_answers === a.total_questions)
+          .map((a) => a.quiz_key)
+      ).size;
+      const hasExam1 = theirAttempts.some((a) => a.quiz_key === 'part1-exam');
+      const hasExam2 = theirAttempts.some((a) => a.quiz_key === 'part2-exam');
+      return passedModules === totalModuleCount() && hasExam1 && hasExam2;
     }).length;
 
     const summary = el('div', { class: 'report-summary-cards' }, [
@@ -789,7 +856,28 @@
         .filter((t) => (!q || t.full_name.toLowerCase().includes(q)) && (!storeQ || t.store === storeQ))
         .map((t) => {
           const theirAttempts = attempts.filter((a) => a.trainee_id === t.id);
-          const modulesDone = new Set(theirAttempts.filter((a) => a.quiz_key.startsWith('module-')).map((a) => a.quiz_key)).size;
+          const moduleAttempts = theirAttempts.filter((a) => a.quiz_key.startsWith('module-'));
+
+          // A module only counts as passed once a perfect-score attempt exists for it.
+          const passedModuleKeys = new Set(
+            moduleAttempts.filter((a) => a.correct_answers === a.total_questions).map((a) => a.quiz_key)
+          );
+          const modulesPassed = passedModuleKeys.size;
+
+          // Total tries across all modules (attempted, not just passed) — a rough
+          // "how much retrying is this person doing overall" signal.
+          const totalModuleAttempts = moduleAttempts.length;
+
+          // Highest attempt count needed to pass any single module, e.g. "took 4
+          // tries on their hardest module" — surfaces who's struggling, not just who's slow.
+          let maxAttemptsToPass = 0;
+          passedModuleKeys.forEach((key) => {
+            const attemptsForKey = moduleAttempts.filter((a) => a.quiz_key === key);
+            const passingAttempt = attemptsForKey.find((a) => a.correct_answers === a.total_questions);
+            const triesNeeded = passingAttempt ? passingAttempt.attempt_number : 1;
+            if (triesNeeded > maxAttemptsToPass) maxAttemptsToPass = triesNeeded;
+          });
+
           const exam1 = theirAttempts.find((a) => a.quiz_key === 'part1-exam');
           const exam2 = theirAttempts.find((a) => a.quiz_key === 'part2-exam');
           const avgScore = theirAttempts.length
@@ -799,7 +887,7 @@
             ? theirAttempts.reduce((latest, a) => (a.completed_at > latest ? a.completed_at : latest), theirAttempts[0].completed_at)
             : null;
 
-          return { t, modulesDone, exam1, exam2, avgScore, lastActive };
+          return { t, modulesPassed, totalModuleAttempts, maxAttemptsToPass, exam1, exam2, avgScore, lastActive };
         });
 
       tableWrap.innerHTML = '';
@@ -814,7 +902,9 @@
           el('th', {}, ['Name']),
           el('th', {}, ['Store']),
           el('th', {}, ['Role']),
-          el('th', {}, ['Modules Reviewed']),
+          el('th', {}, ['Modules Passed']),
+          el('th', {}, ['Total Attempts']),
+          el('th', {}, ['Most Tries on One Module']),
           el('th', {}, ['Part I Exam']),
           el('th', {}, ['Part II Exam']),
           el('th', {}, ['Avg Score']),
@@ -824,12 +914,14 @@
       table.appendChild(thead);
 
       const tbody = el('tbody', {});
-      rows.forEach(({ t, modulesDone, exam1, exam2, avgScore, lastActive }) => {
+      rows.forEach(({ t, modulesPassed, totalModuleAttempts, maxAttemptsToPass, exam1, exam2, avgScore, lastActive }) => {
         tbody.appendChild(el('tr', {}, [
           el('td', {}, [t.full_name]),
           el('td', {}, [t.store]),
           el('td', {}, [t.role || 'sales']),
-          el('td', {}, [`${modulesDone}/${totalModuleCount()}`]),
+          el('td', {}, [`${modulesPassed}/${totalModuleCount()}`]),
+          el('td', {}, [String(totalModuleAttempts)]),
+          el('td', {}, [maxAttemptsToPass ? `${maxAttemptsToPass}\u00d7` : '\u2014']),
           el('td', {}, [exam1 ? `${exam1.correct_answers}/${exam1.total_questions}` : '\u2014']),
           el('td', {}, [exam2 ? `${exam2.correct_answers}/${exam2.total_questions}` : '\u2014']),
           el('td', {}, [avgScore !== null ? `${avgScore}%` : '\u2014']),

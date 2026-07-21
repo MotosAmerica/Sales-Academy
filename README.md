@@ -1,8 +1,12 @@
 # Motos America Sales Academy — Web Training Site
 
 A mobile-friendly web version of the Sales Academy manual: read all 21 modules,
-take instantly-scored quizzes, and unlock two full Part exams. Managers get a
-report showing who's registered and what they've completed.
+take instantly-scored quizzes, and unlock two full Part exams. Each module
+review requires a perfect score to pass — a wrong answer sends the trainee
+back to re-read the module rather than showing which answers were right or
+wrong, so people have to actually revisit the material rather than guess their
+way through. Managers get a report showing who's registered, who's passed
+each module, how many tries it took them, and each Part exam score.
 
 ## What's in this repo
 
@@ -27,11 +31,11 @@ report showing who's registered and what they've completed.
 - Open `schema.sql` from this repo, copy all of it, paste it into the SQL Editor, and click **Run**
 - You should see "Success. No rows returned" — that means the two tables (`trainees` and `quiz_attempts`) were created
 
-**Before running it:** open `schema.sql` and check the store names on this line:
+**Before running it:** the store list is already set to your 4 stores:
 ```sql
-store text not null check (store in ('Triumph Store', 'BMW + Triumph Store')),
+store text not null check (store in ('Cascade Moto Portland', 'Tampa Bay Motos', 'Triumph of Santa Monica', 'Triumph Columbia River')),
 ```
-Change `'Triumph Store'` and `'BMW + Triumph Store'` to your actual store names if these aren't right, and also update the same two names in `app.js` (search for `STORE_OPTIONS`).
+If you ever add, remove, or rename a store, update this line in `schema.sql` (re-run it in Supabase's SQL Editor) **and** the matching `STORE_OPTIONS` list near the top of `app.js` — they must match exactly, or the login dropdown and the database rule will disagree.
 
 ### 3. Connect the site to your Supabase project
 - In Supabase, go to **Project Settings → API**
@@ -58,5 +62,7 @@ That's it — share the GitHub Pages URL with your team.
 ## Notes
 
 - **No passwords.** Trainees log in with just their name and store. This is meant for internal use only — don't link this URL anywhere public.
+- **Module reviews require 100%.** All 5 questions must be correct to pass. A wrong answer doesn't reveal which ones — the trainee is sent back to the module page to re-read, then can retry the review as many times as needed. The report shows how many attempts each person needed per module.
+- **Part exams are not gated.** The two 20-question Part exams score and record the result, full answer review included, but don't block progress or require a retry.
 - **Works offline-ish.** If wifi drops mid-quiz, the score still saves on the device and syncs to the shared database automatically once the connection is back.
 - **Content changes:** if the manual content ever changes, `content-data.js` needs to be regenerated from the source — it isn't meant to be hand-edited directly.

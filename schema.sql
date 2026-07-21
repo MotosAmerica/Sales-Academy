@@ -5,7 +5,7 @@
 create table if not exists trainees (
   id uuid primary key default gen_random_uuid(),
   full_name text not null,
-  store text not null check (store in ('Triumph Store', 'BMW + Triumph Store')),
+  store text not null check (store in ('Cascade Moto Portland', 'Tampa Bay Motos', 'Triumph of Santa Monica', 'Triumph Columbia River')),
   role text not null default 'sales' check (role in ('sales', 'finance', 'manager', 'admin')),
   created_at timestamptz not null default now()
 );
@@ -20,6 +20,9 @@ create table if not exists quiz_attempts (
   correct_answers int not null,
   score_pct numeric not null,
   answers jsonb not null,           -- the raw answers given, for review
+  attempt_number int not null default 1,  -- 1st try, 2nd try, etc. Module reviews
+                                            -- require a perfect score to pass, so this
+                                            -- shows how many tries it took someone.
   completed_at timestamptz not null default now()
 );
 
