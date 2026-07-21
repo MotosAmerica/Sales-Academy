@@ -91,16 +91,15 @@ button {
 .topbar__brand {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   line-height: 1.1;
   cursor: pointer;
 }
 
-.topbar__brand-name {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 15px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.topbar__logo {
+  height: 22px;
+  width: auto;
+  display: block;
 }
 
 .topbar__brand-sub {
@@ -110,7 +109,7 @@ button {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--blue);
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .topbar__right {
@@ -156,10 +155,21 @@ button {
 .login-shell {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   background: var(--charcoal);
   padding: 24px;
+}
+
+.login-shell__logo {
+  margin-bottom: 28px;
+}
+
+.login-shell__logo img {
+  height: 44px;
+  width: auto;
+  display: block;
 }
 
 .login-card {
@@ -170,15 +180,6 @@ button {
   max-width: 420px;
   padding: 36px 30px 30px;
   text-align: center;
-}
-
-.login-card__brand {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 22px;
-  letter-spacing: 0.06em;
-  color: var(--charcoal);
-  text-transform: uppercase;
 }
 
 .login-card__sub {

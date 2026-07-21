@@ -61,12 +61,8 @@
       const raw = localStorage.getItem(PROGRESS_KEY);
       const all = raw ? JSON.parse(raw) : {};
       if (!all[traineeId]) all[traineeId] = {};
-      // Preserve/increment a lifetime attempt counter per quiz, so "took 4
-      // attempts to pass" survives even after they eventually succeed.
-      const prevAttempts = (all[traineeId][quizKey] && all[traineeId][quizKey].attempts) || 0;
-      all[traineeId][quizKey] = { ...result, attempts: prevAttempts + 1 };
+      all[traineeId][quizKey] = result;
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(all));
-      return all[traineeId][quizKey];
     } catch (e) { /* ignore quota errors */ }
   }
 
@@ -261,7 +257,8 @@
       setSession(trainee);
       navigate({ view: 'toc' });
     }
-submitBtn.addEventListener('click', handleSubmit);
+
+    submitBtn.addEventListener('click', handleSubmit);
     [nameField, storeField].forEach((f) => {
       f.querySelector('input,select').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') handleSubmit();
@@ -470,7 +467,8 @@ submitBtn.addEventListener('click', handleSubmit);
       return local;
     }
   }
-// ==========================================================================
+
+  // ==========================================================================
   // VIEW: Module reader
   // ==========================================================================
 
@@ -556,6 +554,7 @@ submitBtn.addEventListener('click', handleSubmit);
 
     root.appendChild(page);
   }
+
 
   // ==========================================================================
   // VIEW: Quiz (module review, 5 questions) and Exam (Part review, 20 questions)
@@ -776,7 +775,7 @@ submitBtn.addEventListener('click', handleSubmit);
     const passed = result.scorePct >= 70;
 
     const card = el('div', { class: 'result-card' });
-card.appendChild(el('div', { class: 'result-card__score' + (passed ? '' : ' result-card__score--fail') }, [`${result.correct}/${result.total}`]));
+    card.appendChild(el('div', { class: 'result-card__score' + (passed ? '' : ' result-card__score--fail') }, [`${result.correct}/${result.total}`]));
     card.appendChild(el('div', { class: 'result-card__label' }, [`${result.scorePct}% Score`]));
     card.appendChild(el('div', { class: 'result-card__msg' }, [
       passed
@@ -809,6 +808,7 @@ card.appendChild(el('div', { class: 'result-card__score' + (passed ? '' : ' resu
     page.appendChild(card);
     root.appendChild(page);
   }
+
 
   // ==========================================================================
   // VIEW: Report (manager / admin) — who's registered, who's completed what
@@ -1041,5 +1041,3 @@ card.appendChild(el('div', { class: 'result-card__score' + (passed ? '' : ' resu
     flushQueue();
   });
 })();
-
-
