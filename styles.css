@@ -5,23 +5,38 @@
    ========================================================================== */
 
 :root {
-  --ink: #1a1a18;
-  --charcoal: #242321;
-  --charcoal-soft: #34322f;
-  --blue: #1e5b8c;
-  --blue-dark: #123a5c;
-  --blue-pale: #e8f0f6;
+  /* Official Motos America brand colors (per brand guide): */
+  --brand-black: #000000;
+  --brand-red: #e70033;    /* Pantone 185 */
+  --brand-blue: #0039a6;   /* Pantone 286 */
+  --brand-white: #ffffff;
+
+  --ink: #17181a;
+  --charcoal: #000000;
+  --charcoal-soft: #1c1d1f;
+
+  /* Primary accent = brand red (the guide uses red as the lead accent
+     throughout headlines, icons, and highlights; blue is reserved for
+     BMW-specific or secondary/informational moments — see --info-* below). */
+  --blue: #e70033;
+  --blue-dark: #b40028;
+  --blue-pale: #fdeaef;
+
+  --info: #0039a6;
+  --info-dark: #00287a;
+  --info-pale: #e8edf8;
+
   --steel: #5b6570;
-  --hairline: #d4dce2;
-  --cream: #f5f1e8;
+  --hairline: #dfe2e6;
+  --cream: #f6f7f9;
   --white: #ffffff;
   --success: #1f7a4d;
   --success-bg: #e7f5ec;
-  --danger: #a13a2f;
-  --danger-bg: #fbeae7;
+  --danger: #b40028;
+  --danger-bg: #fdeaef;
 
-  --font-display: 'Oswald', 'Arial Narrow', sans-serif;
-  --font-body: 'Source Serif 4', Georgia, 'Cambria', serif;
+  --font-display: 'Montserrat', 'Arial Narrow', sans-serif;
+  --font-body: 'Montserrat', -apple-system, 'Segoe UI', Arial, sans-serif;
 
   --radius: 10px;
   --radius-sm: 6px;
@@ -897,7 +912,7 @@ table.report-table tr:last-child td { border-bottom: none; }
 
 .banner--warn { background: #fff4e0; color: #7a5510; }
 .banner--error { background: var(--danger-bg); color: var(--danger); }
-.banner--info { background: var(--blue-pale); color: var(--blue-dark); }
+.banner--info { background: var(--info-pale); color: var(--info-dark); }
 
 /* ---------- Responsive ---------- */
 
