@@ -167,6 +167,28 @@
     return DATA.modules.length;
   }
 
+  // Determines where "next" should go after a given module number, accounting
+  // for Part boundaries: after the last module of a Part, "next" is that
+  // Part's exam, not the next Part's Module 1. Returns a route object, a
+  // label for the button, or null if there's truly nothing after (end of
+  // Part II with no further content).
+  function getNextDestination(num) {
+    const current = moduleByNum(num);
+    if (!current) return null;
+
+    const next = moduleByNum(num + 1);
+    if (next && next.part === current.part) {
+      return { route: { view: 'module', num: next.num }, label: 'Next Module \u2192' };
+    }
+
+    // Last module of this Part — route to that Part's exam instead.
+    const examPart = current.part;
+    return {
+      route: { view: 'exam', part: examPart },
+      label: examPart === 'I' ? 'Take the Part I Exam \u2192' : 'Take the Part II Exam \u2192',
+    };
+  }
+
   // ==========================================================================
   // VIEW: Login
   // ==========================================================================
@@ -325,8 +347,33 @@
       el('div', { class: 'topbar__brand-sub' }, ['Sales Academy']),
     ]);
 
+    const menuBtn = el('button', { class: 'topbar__link topbar__menu-btn' }, ['\u2630 Modules']);
+    const menuPanel = buildModuleMenuPanel();
+    let menuOpen = false;
+
+    function toggleMenu(force) {
+      menuOpen = typeof force === 'boolean' ? force : !menuOpen;
+      menuPanel.classList.toggle('module-menu--open', menuOpen);
+    }
+
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleMenu();
+    });
+    document.addEventListener('click', (e) => {
+      if (menuOpen && !menuPanel.contains(e.target) && e.target !== menuBtn) {
+        toggleMenu(false);
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (menuOpen && e.key === 'Escape') {
+        toggleMenu(false);
+      }
+    });
+
     const right = el('div', { class: 'topbar__right' });
     right.appendChild(el('span', { class: 'topbar__user' }, [`${trainee.full_name} · ${trainee.store}`]));
+    right.appendChild(menuBtn);
 
     if (trainee.role === 'manager' || trainee.role === 'admin') {
       right.appendChild(el('button', { class: 'topbar__link', onclick: () => navigate({ view: 'report' }) }, ['Report']));
@@ -335,7 +382,55 @@
 
     bar.appendChild(brand);
     bar.appendChild(right);
+    bar.appendChild(menuPanel);
     root.appendChild(bar);
+  }
+
+  // Dropdown panel listing every module (grouped by Part) plus both exams,
+  // so a trainee can jump directly to any module from anywhere on the site —
+  // e.g. to revisit one or look something up — without going back to the
+  // dashboard first.
+  function buildModuleMenuPanel() {
+    const panel = el('div', { class: 'module-menu' });
+
+    function goTo(route) {
+      panel.classList.remove('module-menu--open');
+      navigate(route);
+    }
+
+    const closeBtn = el('button', {
+      class: 'module-menu__close',
+      onclick: () => panel.classList.remove('module-menu--open'),
+    }, ['\u2715 Close']);
+    panel.appendChild(closeBtn);
+
+    function buildGroup(label, mods) {
+      const group = el('div', { class: 'module-menu__group' });
+      group.appendChild(el('div', { class: 'module-menu__group-label' }, [label]));
+      mods.forEach((m) => {
+        group.appendChild(
+          el('button', { class: 'module-menu__item', onclick: () => goTo({ view: 'module', num: m.num }) }, [
+            el('span', { class: 'module-menu__item-num' }, [String(m.num).padStart(2, '0')]),
+            el('span', {}, [m.title]),
+          ])
+        );
+      });
+      return group;
+    }
+
+    const partI = DATA.modules.filter((m) => m.part === 'I');
+    const partII = DATA.modules.filter((m) => m.part === 'II');
+
+    panel.appendChild(buildGroup('Part I \u2014 The Sales Team', partI));
+    panel.appendChild(
+      el('button', { class: 'module-menu__item module-menu__item--exam', onclick: () => goTo({ view: 'exam', part: 'I' }) }, ['Part I Exam'])
+    );
+    panel.appendChild(buildGroup('Part II \u2014 The Finance & Insurance Office', partII));
+    panel.appendChild(
+      el('button', { class: 'module-menu__item module-menu__item--exam', onclick: () => goTo({ view: 'exam', part: 'II' }) }, ['Part II Exam'])
+    );
+
+    return panel;
   }
 
   // ==========================================================================
@@ -503,14 +598,20 @@
 
   function renderModule(root, trainee, num) {
     renderTopbar(root, trainee);
-    const page = el('div', { class: 'page' });
 
     const m = moduleByNum(num);
+    const videoId = window.MODULE_VIDEOS && window.MODULE_VIDEOS[num];
+
     if (!m) {
+      const page = el('div', { class: 'page' });
       page.appendChild(el('div', { class: 'empty-state' }, ['Module not found.']));
       root.appendChild(page);
       return;
     }
+
+    // Wider container when a video is present, so the split-screen has room
+    // to breathe on desktop; same comfortable reading width otherwise.
+    const page = el('div', { class: videoId ? 'page page--wide' : 'page' });
 
     const crumbs = el('div', { class: 'crumbs' }, [
       el('button', { onclick: () => navigate({ view: 'toc' }) }, ['Contents']),
@@ -519,22 +620,45 @@
     ]);
     page.appendChild(crumbs);
 
-    page.appendChild(el('div', { class: 'module-header__eyebrow' }, [`Module ${String(m.num).padStart(2, '0')}`]));
-    page.appendChild(el('div', { class: 'module-header__title' }, [m.title]));
+    const header = el('div', {}, [
+      el('div', { class: 'module-header__eyebrow' }, [`Module ${String(m.num).padStart(2, '0')}`]),
+      el('div', { class: 'module-header__title' }, [m.title]),
+    ]);
     if (m.tagline) {
-      page.appendChild(el('div', { class: 'module-header__tagline' }, [m.tagline]));
+      header.appendChild(el('div', { class: 'module-header__tagline' }, [m.tagline]));
     }
+    page.appendChild(header);
 
     const body = el('div', { class: 'module-body' });
     m.blocks.forEach((b) => {
       const node = renderBlockToNode(b);
       if (node) body.appendChild(node);
     });
-    page.appendChild(body);
+
+    if (videoId) {
+      // Split-screen: video pinned alongside the text on desktop, stacked
+      // above it on narrow screens (handled in CSS, not here).
+      const videoPane = el('div', { class: 'module-video-pane' }, [
+        el('div', { class: 'module-video-wrap' }, [
+          el('iframe', {
+            src: `https://www.youtube-nocookie.com/embed/${videoId}`,
+            title: `${m.title} — video`,
+            allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture',
+            allowfullscreen: 'true',
+            frameborder: '0',
+          }),
+        ]),
+      ]);
+      const textPane = el('div', { class: 'module-text-pane' }, [body]);
+      const splitWrap = el('div', { class: 'module-split' }, [videoPane, textPane]);
+      page.appendChild(splitWrap);
+    } else {
+      page.appendChild(body);
+    }
 
     const nav = el('div', { class: 'module-nav' });
     const prevModule = moduleByNum(num - 1);
-    const nextModule = moduleByNum(num + 1);
+    const nextDest = getNextDestination(num);
 
     nav.appendChild(
       prevModule
@@ -546,9 +670,12 @@
     );
     page.appendChild(nav);
 
-    if (nextModule) {
+    if (nextDest) {
+      const skipLabel = nextDest.route.view === 'exam'
+        ? (nextDest.route.part === 'I' ? 'Skip to Part I Exam \u2192' : 'Skip to Part II Exam \u2192')
+        : 'Skip to Next Module \u2192';
       const nextRow = el('div', { style: 'text-align:right; margin-top:10px;' });
-      nextRow.appendChild(el('button', { class: 'btn btn--ghost', onclick: () => navigate({ view: 'module', num: nextModule.num }) }, ['Skip to Next Module \u2192']));
+      nextRow.appendChild(el('button', { class: 'btn btn--ghost', onclick: () => navigate(nextDest.route) }, [skipLabel]));
       page.appendChild(nextRow);
     }
 
@@ -746,11 +873,11 @@
         'Nice work \u2014 perfect score. This module is locked in.',
       ]));
       const actions = el('div', { class: 'quiz-actions' });
-      const nextModule = moduleByNum(opts.num + 1);
+      const nextDest = getNextDestination(opts.num);
       actions.appendChild(el('button', { class: 'btn btn--ghost' }, ['Back to Contents']));
       actions.querySelector('button').addEventListener('click', () => navigate({ view: 'toc' }));
-      if (nextModule) {
-        actions.appendChild(el('button', { class: 'btn btn--primary', onclick: () => navigate({ view: 'module', num: nextModule.num }) }, ['Next Module \u2192']));
+      if (nextDest) {
+        actions.appendChild(el('button', { class: 'btn btn--primary', onclick: () => navigate(nextDest.route) }, [nextDest.label]));
       }
       card.appendChild(actions);
     } else {
